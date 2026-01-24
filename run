@@ -1,0 +1,140 @@
+#!/usr/bin/env python3.12
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import setproctitle
+
+VENV_DIR = Path.home() / ".venv" / "background-removal"
+REPO_ROOT = Path(__file__).resolve().parent
+
+
+# ##################################################################
+# find venv python
+# locate the python interpreter inside the managed virtual environment
+def find_venv_python() -> Path | None:
+    candidates = [
+        VENV_DIR / "bin" / "python3.12",
+        VENV_DIR / "bin" / "python",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+# ##################################################################
+# ensure venv python
+# re-exec this script with the venv interpreter when available
+def ensure_venv_python() -> None:
+    venv_python = find_venv_python()
+    if not venv_python:
+        return
+
+    venv_path = VENV_DIR.resolve()
+    if Path(sys.prefix).resolve() == venv_path:
+        return
+
+    active_venv = os.environ.get("VIRTUAL_ENV")
+    if active_venv and Path(active_venv).resolve() == venv_path:
+        return
+
+    script_path = Path(__file__).resolve()
+    os.execv(str(venv_python), [str(venv_python), str(script_path), *sys.argv[1:]])
+
+
+# ##################################################################
+# ensure src path
+# add the src directory to import search paths for local modules
+def ensure_src_path() -> None:
+    src_path = REPO_ROOT / "src"
+    sys.path.insert(0, str(src_path))
+
+
+# ##################################################################
+# run command
+# execute a command and return the exit code
+def run_command(command: list[str], log_path: Path | None = None, cwd: Path | None = None) -> int:
+    if log_path:
+        with log_path.open("w", encoding="utf-8") as handle:
+            return subprocess.call(command, stdout=handle, stderr=subprocess.STDOUT, cwd=cwd)
+    return subprocess.call(command, cwd=cwd)
+
+
+# ##################################################################
+# command remove
+# remove background for a single image
+def command_remove(args: argparse.Namespace) -> int:
+    ensure_src_path()
+    from remove_background import remove_background
+
+    output_path = remove_background(Path(args.input_path), Path(args.output_path))
+    print(output_path)
+    return 0
+
+
+# ##################################################################
+# command test
+# run a single test target and write logs to output/testing
+def command_test(args: argparse.Namespace) -> int:
+    test_output = REPO_ROOT / "output/testing"
+    test_output.mkdir(parents=True, exist_ok=True)
+    safe_name = args.target.replace("/", "_").replace("::", "_")
+    log_path = test_output / f"{safe_name}.log"
+    return run_command(
+        ["pytest", "-W", "error", "-q", args.target],
+        log_path=log_path,
+        cwd=REPO_ROOT,
+    )
+
+
+# ##################################################################
+# command lint
+# run ruff with the configured line length
+def command_lint(_: argparse.Namespace) -> int:
+    return run_command(["ruff", "check", "--line-length", "120"], cwd=REPO_ROOT)
+
+
+# ##################################################################
+# command check
+# run the full suite and quality gates
+def command_check(_: argparse.Namespace) -> int:
+    return run_command(["dazpycheck"], cwd=REPO_ROOT)
+
+
+# ##################################################################
+# main
+# parse arguments and dispatch commands
+def main(argv: list[str]) -> int:
+    ensure_venv_python()
+    setproctitle.setproctitle("remove-background")
+
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    remove_parser = sub.add_parser("remove", help="Remove background from an image")
+    remove_parser.add_argument("input_path")
+    remove_parser.add_argument("output_path")
+    remove_parser.set_defaults(func=command_remove)
+
+    test_parser = sub.add_parser("test", help="Run a single test target")
+    test_parser.add_argument("target")
+    test_parser.set_defaults(func=command_test)
+
+    lint_parser = sub.add_parser("lint", help="Run ruff lint")
+    lint_parser.set_defaults(func=command_lint)
+
+    check_parser = sub.add_parser("check", help="Run dazpycheck")
+    check_parser.set_defaults(func=command_check)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+# ##################################################################
+# entrypoint
+# run the command line interface
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

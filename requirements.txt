@@ -1,0 +1,13 @@
+torch
+torchvision
+transformers
+pillow
+kornia
+setproctitle
+pytest
+pytest-timeout
+ruff
+einops
+timm
+dazpycheck
+coverage
